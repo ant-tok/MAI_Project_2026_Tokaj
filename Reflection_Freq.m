@@ -1,12 +1,53 @@
 clear; close all; clc;
 %model arm, look at TOF
+% It'is database,
+
+function E = recursiveField(n, mask_area, k_array, dist_sum, imped_array)
+
+    if n == 1
+        E_entry = 1; 
+        dist = 0;
+    else
+        E_prev_at_boundary = recursiveField(n-1, dist_sum(n-1), k_array, dist_sum, imped_array);
+
+        tau = 2*imped_array(:,n) ./ (imped_array(:,n) + imped_array(:,n-1));
+
+        E_entry = tau .* E_prev_at_boundary;
+        dist = dist_sum(n-1);
+    end
+
+    E = E_entry .* exp(-1j*k_array(:,n).*(mask_area-dist));
+end
+
+function E = reflect_Multiplier(n, mask_area, m, Em, k_array, dist_sum, imped_array)
+    % fprintf('%f\n', dist_sum(n));
+    if n == m
+        % fprintf("G\n")
+        E_boundary = Em; 
+    else
+        tau = 2*imped_array(:,n) ./ (imped_array(:,n+1) + imped_array(:,n));
+        E_boundary = tau .* reflect_Multiplier(n+1, dist_sum(n), m, Em, k_array, dist_sum, imped_array);
+    end
+    E = E_boundary .* exp(-1j*k_array(:,n).*(dist_sum(n) - mask_area));
+end
+
+function eps_r = debye_func(w, e_inf, e_s, Sig, fs_perm)
+
+    eps_r = e_inf + (e_s - e_inf)./(1 + 1j*w*17.5*1e-12) - 1j*Sig./(w*fs_perm);
+end
+ 
+
 
 fs_permittivity = 8.854187817e-12; % permittivity of free space 
 fs_permeability = pi*4e-7; % permeability of free space 
 
+%Layer properties
+% rel_permittivity_array = [2+1j, 9+1j, 1+1j, 4+1j];  
+rel_permittivity_array = [2, 9, 1, 4];  
 
-rel_permittivity_array = [1, 4, 9, 2];   
-layer_thickness = [1.15, 1.5, 2.0]; 
+
+
+layer_thickness = [0.002, 0.05, 0.002]; %Treat last layer as infinite   
 
 N = numel(rel_permittivity_array);
 
@@ -16,106 +57,113 @@ for n = 1:N-1
 end
 
 
-zmax = 10.0;
-tim_max = 80;
+zmax = 0.1;
+tim_max = 10;
 
 frequency_spacing = 1e7;
 max_freq = 3e9; 
-no_tones = max_freq/frequency_spacing;
-freq_list = (1:no_tones)'*frequency_spacing;
+no_Tones = max_freq/frequency_spacing;
+freq_list = (1:no_Tones)'*frequency_spacing;
 
-% Values for pulse
-f0 = 1e9; %Carrier frequency
-tp = 1e-9; % Envelope width
+
+Nf = numel(freq_list);
+w = 2*pi*freq_list;
+
+two_d_permittivity_array = zeros(Nf,N);
+
+
+skin_perm = debye_func(w, 18.51, 42.28, 0.679, fs_permittivity);
+muscle_perm= debye_func(w, 24.60, 58.22, 0.664, fs_permittivity);
+
+% two_d_permittivity_array(:,1) = 2;
+two_d_permittivity_array(:,1) = skin_perm;
+two_d_permittivity_array(:,2) = muscle_perm;
+% two_d_permittivity_array(:,2) = 9;
+% two_d_permittivity_array(:,3) = 1;
+two_d_permittivity_array(:,3) = skin_perm;
+two_d_permittivity_array(:,4) = 1;
 
 
 %c0 = 1/sqrt(fs_permittivity*fs_permeability); 
 c0 = 3e8;
 
 
-v_array = c0 ./ sqrt(rel_permittivity_array);
 imped_array = sqrt(fs_permeability ./ (fs_permittivity*rel_permittivity_array));
- 
 
-Gamma_array = zeros(1, N-1);
-Tau_array = zeros(1, N-1);
-for m = 1:N-1
-    eta_l = imped_array(m);
-    eta_r = imped_array(m+1);
-    Gamma_array(m) = (eta_r - eta_l)/(eta_r + eta_l);
-    Tau_array(m) = 2*eta_r/(eta_r + eta_l);
-end
 
-tau_total = ones(1, N);
-for n = 2:N
-    tau_total(n) = tau_total(n-1)*Tau_array(n-1);
-end
+% Values for pulse
+f0 = 1e9; 
+tp = 25e-11;
 
-no_tones = max_freq/frequency_spacing;
-
-Nf = numel(freq_list);
-w = 2*pi*freq_list;
- 
-k_array = w * (1./v_array);
-k1 = k_array(:,1);
- 
-
- 
-phase_at_bourdary = zeros(Nf, N-1);   % phi_to_boundary(:,m) = one-way phase to reach boundary m
-running_phase = zeros(Nf,1);
-for m = 1:N-1
-    running_phase = running_phase + k_array(:,m).*layer_thickness(m);
-    phase_at_bourdary(:,m) = running_phase;
-end
-
-dist_step = (v_array(1)/f0)/40;
+dist_step = (c0/f0)/400;
 z = (0:dist_step:zmax);
 Nz = numel(z);
- 
 
-E_fwd = zeros(Nf, Nz);
 
- 
+no_Tones = max_freq/frequency_spacing;
+
+% v_array = c0 ./ sqrt(rel_permittivity_array);
+% k_array = w * (1./v_array);
+
+
+k_array = w .* sqrt(fs_permeability*fs_permittivity*two_d_permittivity_array);
+imped_array = sqrt(fs_permeability ./ (fs_permittivity*two_d_permittivity_array));
+
+
+% Find forward E, from transission coefficient
+% Use of 8.88 from book and surrounding equations
+E_fwd = zeros(Nf, Nz); 
+
 for n = 1:N
+
     kn = k_array(:,n);
+
     if n == 1
         mask = z < dist_sum(1);
-        E_fwd(:,mask) = tau_total(n) * exp(-1j*kn*(z(mask)));
+        E_fwd(:,mask) = recursiveField(n, z(mask), k_array, dist_sum, imped_array);
+
     else
         if n == N
-            mask = z >= dist_sum(N-1);
-            z0 = dist_sum(N-1);
+          mask = z >= dist_sum(N-1);
+
         else
-            mask = (z >= dist_sum(n-1)) & (z < dist_sum(n));
-            z0 = dist_sum(n-1);
+          mask = (z >= dist_sum(n-1)) & (z < dist_sum(n));
+
         end
-        E_fwd(:,mask) = tau_total(n) * exp(-1j*phase_at_bourdary(:,n-1)) .* exp(-1j*kn*(z(mask)-z0));
-
+        E_fwd(:,mask) = recursiveField(n, z(mask), k_array, dist_sum, imped_array);
     end
-
     
 end
 
 
-E_echo = zeros(Nf, Nz);
+%Reflective E, or Backwards E
+E_Back = zeros(Nf, Nz);
 for m = 1:N-1
-    echo_amp = tau_total(m) * Gamma_array(m);   % refection after transmission
+
+
+    leftside = imped_array(:,m);
+    rightside = imped_array(:,m+1);
+    Gamma_m = (rightside - leftside)./(rightside + leftside);
  
-    for n = 1:m   % every region the echo must cross on its way back to the receiver
+    E_at_m = Gamma_m .* recursiveField(m, dist_sum(m), k_array, dist_sum, imped_array);
+ 
+    for n = 1:m 
+        %fprintf("test1");
         if n == 1
+            
             mask = z < dist_sum(1);
         else
             mask = (z >= dist_sum(n-1)) & (z < dist_sum(n));
         end
-
-        a = echo_amp * exp(-1j*(2*phase_at_bourdary(:,m) - phase_at_bourdary(:,n)));
-        a = a .* exp(-1j*k_array(:,n).*(dist_sum(n) - z(mask)));
-        E_echo(:,mask) = E_echo(:,mask) +  a;
-        % E_echo(:,mask) = E_echo(:,mask) + echo_amp * exp(-1j*phase_total);
+        edge_val = reflect_Multiplier(n, z(mask), m, E_at_m, k_array, dist_sum, imped_array);
+        kn = k_array(:,n);
+        E_Back(:,mask) = E_Back(:,mask) + edge_val;
     end
 end
+
  
-E = E_fwd + E_echo;
+
+E = E_fwd + E_Back;
 
 
 Nz = numel(z);
@@ -123,7 +171,7 @@ Nz = numel(z);
 Y = E(:, 1);
 
 
-Frequency_Weights = (tp*sqrt(pi)/2) * exp(-1j*2*pi*freq_list*3*tp);
+Frequency_Weights = (tp*sqrt(pi)/2) * exp(-1j*2*pi*freq_list*6*tp);
 
 Frequency_Weights = Frequency_Weights .* exp(-(pi*(freq_list - f0)*tp).^2);   % Gaussian bell around f0
 
@@ -134,8 +182,8 @@ Ifft_Length = 2^12;
 time_axis = (0:Ifft_Length-1)'/(Ifft_Length*frequency_spacing);  
 
 
-synth = @(S) real(ifft([0; Ifft_Length*frequency_spacing*S; zeros(Ifft_Length-2*no_tones-1,1); conj(flipud(Ifft_Length*frequency_spacing*S))]));
-full_synth = @(S) real(ifft([zeros(1,Nz); Ifft_Length*frequency_spacing*S; zeros(Ifft_Length-2*no_tones-1, Nz);conj(flipud(Ifft_Length*frequency_spacing*S))]));
+synth = @(S) real(ifft([0; Ifft_Length*frequency_spacing*S; zeros(Ifft_Length-2*no_Tones-1,1); conj(flipud(Ifft_Length*frequency_spacing*S))]));
+full_synth = @(S) real(ifft([zeros(1,Nz); Ifft_Length*frequency_spacing*S; zeros(Ifft_Length-2*no_Tones-1, Nz);conj(flipud(Ifft_Length*frequency_spacing*S))]));
 
 recieved = synth(Y);
 transmitted = synth(Frequency_Weights); 
@@ -143,6 +191,8 @@ response_signal = synth(response);
 
 response_full = Frequency_Weights .* E; 
 Etz = full_synth((response_full));
+
+
 
 
 % figure;
@@ -153,23 +203,29 @@ Etz = full_synth((response_full));
 % 
 % 
 % figure;
-subplot(3,1,1);
+subplot(4,1,1);
 
 plot(time_axis*1e9, recieved); grid on
 xlim([0 tim_max]); xlabel('t (ns)'); ylabel('E (V/m)');
 title('Recieved Signal in Time');
 
-subplot(3,1,2);
+subplot(4,1,2);
 
 plot(time_axis*1e9, transmitted); grid on
 xlim([0 tim_max]); xlabel('t (ns)'); ylabel('E (V/m)');
 title('Pulse');
 
-subplot(3,1,3);
+subplot(4,1,3);
 
 plot(time_axis*1e9, response_signal); grid on
 xlim([0 tim_max]); xlabel('t (ns)'); ylabel('E at Rx (V/m)');
 title('Recieved Conjugated with pulse');
+
+subplot(4,1,4);
+
+plot(time_axis*1e9, transmitted - response_signal); grid on
+xlim([0 tim_max]); xlabel('t (ns)'); ylabel('E at Rx (V/m)');
+title('Recieved Conjugated with pulse Minus the pulse ');
 
 
 figure;
