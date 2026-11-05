@@ -1,0 +1,186 @@
+clear; clc; close all;
+
+fs_permittivity = 8.854187817e-12;
+fs_permeability = pi*4e-7;
+%freq_list = (0.5:0.05:6.5)'*1e9;
+%freq_list = [0.8e9,0.9e9]; 
+freq_list = 0.8e9; 
+Nf = numel(freq_list);
+w = 2*pi*freq_list;
+backgroundPerm = 77 - 16.6j; % Salt water perm from BF
+k_background = w*sqrt(fs_permeability*fs_permittivity*backgroundPerm);
+
+% layer_thickness = [0.002, 0.025, 0.002]; 
+% layer_eps = [eps_b, 54-13j, eps_b, eps_b];   
+% N = numel(layer_thickness) + 1;  
+% dist_sum = cumsum(layer_thickness);  
+% L = 0.04;
+
+
+L  = 0.13;
+Nx = 50;
+Ny = 50;
+N_tot = Nx*Ny;
+
+dx = L/Nx; 
+dy = L/Ny;
+
+horiz_Midpoint = ((1:Nx) - 0.5)*dx - L/2;
+vert_Midpoint = ((1:Ny) - 0.5)*dy - L/2;
+[Xg, Yg] = meshgrid(horiz_Midpoint, vert_Midpoint);
+xCellCentres = Xg(:);
+yCellCentres = Yg(:);  
+
+skin_perm = 42-18.7j;
+muscle_perm = 55.4-20.5j;
+
+
+radii = [ 0.031, 0.028];% 0.009 ];
+permitivities = [skin_perm, muscle_perm];%, skin_perm];
+N = numel(radii);
+eps_true = backgroundPerm*ones(N_tot, 1);
+% Masks for the layers
+for n = 1:N
+    mask = xCellCentres.^2 + yCellCentres.^2 <= radii(n)^2;
+    eps_true(mask) = permitivities(n);
+end
+baseline_contrast = (eps_true - backgroundPerm) /backgroundPerm;% BF eq 2
+
+Transmit_ant = 24;
+Recieve_ant = 24;
+Antenna_pairs = Transmit_ant*Recieve_ant;
+R_ant = 0.13; %Q
+
+% Placement of antennas
+T_angle = ((0:Transmit_ant-1)' * 2 * pi)/Transmit_ant;   
+x_ant_location = R_ant*cos(T_angle);  
+y_ant_location = R_ant*sin(T_angle);
+
+
+% Distances:
+cell_cell_dists = sqrt((xCellCentres - xCellCentres.').^2 + (yCellCentres - yCellCentres.').^2);  
+transmitter_cell_dists = sqrt((x_ant_location - xCellCentres.').^2 + (y_ant_location - yCellCentres.').^2);  
+
+diag_idx = (1:N_tot+1:N_tot^2);
+
+
+
+G_D = zeros(N_tot, N_tot, Nf);
+G_S = zeros(Recieve_ant, N_tot, Nf);
+E_i = zeros(N_tot, Transmit_ant, Nf);
+
+for freq = 1:Nf
+    kb = k_background(freq);
+
+    Green_2D = (1/4j)*besselh(0, 2, kb*cell_cell_dists); 
+    
+    %Integral assumes constant field at cell
+    GDTEMP = kb^2 * dx^2 * Green_2D;  
+    %0 at diagonals as Green breaks there
+    GDTEMP(diag_idx) = 0;
+    G_D(:,:,freq) = GDTEMP;
+
+    Green_2D_Rcvr = (1/4j)*besselh(0, 2, kb*transmitter_cell_dists); 
+
+    G_S(:,:,freq) = kb^2 * dx^2 * Green_2D_Rcvr;
+    
+    E_i(:,:,freq) = (1/(1j*4))*besselh(0, 2, kb*transmitter_cell_dists');  
+end
+
+
+
+
+% Based off eq 5 + 7 in BF
+E_s = zeros(Recieve_ant, Transmit_ant, Nf);
+X_fwr = spdiags(baseline_contrast, 0, N_tot, N_tot);
+I = speye(N_tot);
+
+for freq = 1:Nf
+    E_t = (I - G_D(:,:,freq)*X_fwr) \ E_i(:,:,freq);  % Solve to find E_t
+    E_s(:,:,freq) = G_S(:,:,freq)*(X_fwr*E_t); 
+end
+
+
+% Steps 1 to 7 from Magdum paper
+n_iter = 6;
+lambda = 1.0e-6;  
+R = I;    
+
+RRE = zeros(n_iter, 1);
+MSE = zeros(n_iter, 1);
+
+chi = zeros(N_tot, 1);
+
+for n = 1:n_iter
+    X = spdiags(chi, 0, N_tot, N_tot);
+    E_b = E_i;
+    G_kernel = zeros(Antenna_pairs*Nf, N_tot);
+    h = zeros(Antenna_pairs*Nf, 1);
+    for freq = 1:Nf  %
+        GD_f = G_D(:,:,freq);
+        GS_f = G_S(:,:,freq);
+
+        E_b = (I - GD_f*X) \ E_i(:,:,freq);  
+
+
+        G_b = GS_f / (I - X*GD_f); 
+
+
+        for p = 1:Transmit_ant  % transmitter antennea as incidence fields
+            p_n_positions = (freq-1)*Antenna_pairs + (p-1)*Recieve_ant + (1:Recieve_ant);
+            G_kernel(p_n_positions,:) = G_b*diag(E_b(:,p));   % G_b*diag(E_b(:,p))
+            h(p_n_positions) = E_s(:,p,freq) - GS_f*(X*E_b(:,p));
+        end
+    end
+
+    % eqs 33 & 34 BF
+    RRE(n) = norm(h)^2/norm(E_s(:))^2;   % Relative Residual error
+    MSE(n) = norm(backgroundPerm*(1+chi) - eps_true)/norm(eps_true);
+    
+    % BF 11
+    d_chi  = (G_kernel'*G_kernel + lambda*(R'*R)) \ (G_kernel'*h);
+
+
+    chi = chi + d_chi;
+
+    fprintf('Iteration %2d  RRE = %.3e  MSE = %.3f\n', n, RRE(n), MSE(n));
+end
+
+
+eps_rec = backgroundPerm*(1 + chi);  % contrast to permittivity
+in_mus  = abs(eps_true - permitivities(2)) < 1e-9;              % muscle-only cells
+fprintf('Muscle layer mean eps: calced %.1f %+.1fj  true %.1f %+.1fj\n', real(mean(eps_rec(in_mus))), ...
+        imag(mean(eps_rec(in_mus))), real(permitivities(2)), imag(permitivities(2)));
+
+E_s_final = zeros(Recieve_ant, Transmit_ant, Nf);
+X = spdiags(chi, 0, N_tot, N_tot);
+for freq = 1:Nf
+    E_t = (I - G_D(:,:,freq)*X) \ E_i(:,:,freq);
+    E_s_final(:,:,freq) = G_S(:,:,freq)*(X*E_t);
+end
+
+
+% Figs
+img = @(v) reshape(v, Ny, Nx);
+figure;
+subplot(2,2,1); imagesc(horiz_Midpoint*1e2, vert_Midpoint*1e2, real(img(eps_true))); axis xy image; colorbar; title('True \epsilon'' (real)');
+subplot(2,2,2); imagesc(horiz_Midpoint*1e2, vert_Midpoint*1e2, real(img(eps_rec)));  axis xy image; colorbar; title('DBIM \epsilon'' (real)');
+subplot(2,2,3); imagesc(horiz_Midpoint*1e2, vert_Midpoint*1e2, -imag(img(eps_true))); axis xy image; colorbar; title('True \epsilon'''' (loss)');
+subplot(2,2,4); imagesc(horiz_Midpoint*1e2, vert_Midpoint*1e2, -imag(img(eps_rec)));  axis xy image; colorbar; title('DBIM \epsilon'''' (loss)');
+xlabel('x (cm)'); ylabel('y (cm)');
+% 1D cut
+[~, iy] = min(abs(vert_Midpoint));
+et = img(eps_true);  er = img(eps_rec);
+figure;
+subplot(2,1,1);
+plot(horiz_Midpoint*1e2, real(et(iy,:)), 'k-', 'LineWidth', 1.5); hold on; grid on;
+plot(horiz_Midpoint*1e2, real(er(iy,:)), 'r.-', 'LineWidth', 1.2);
+ylabel('\epsilon'' (real)'); legend('True', 'DBIM'); title('Recovered permittivity profile, y = 0');
+subplot(2,1,2);
+plot(horiz_Midpoint*1e2, -imag(et(iy,:)), 'k-', 'LineWidth', 1.5); hold on; grid on;
+plot(horiz_Midpoint*1e2, -imag(er(iy,:)), 'r.-', 'LineWidth', 1.2);
+xlabel('x (cm)'); ylabel('\epsilon'''' (loss)');
+figure;
+semilogy(1:n_iter, RRE, 'o-', 'LineWidth', 1.2); hold on; grid on;
+plot(1:n_iter, MSE, 's-', 'LineWidth', 1.2);
+xlabel('Iteration'); ylabel('Error'); legend('RRE', 'MSE'); title('Convergence');
