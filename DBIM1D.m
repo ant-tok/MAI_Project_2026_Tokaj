@@ -19,6 +19,10 @@ dz = 0.5e-3;
 Nc = round(L/dz);        
 z = ((1:Nc)' - 0.5)*dz; 
 
+dz_fwr = 0.1e-3;
+Nc_fwr = round(L/dz_fwr);
+z_fwr = ((1:Nc_fwr)' - 0.5)*dz_fwr;
+
 eps_true = layer_eps(N)*ones(Nc, 1); 
 % Masks for the layers
 for n = 1:N-1   
@@ -30,6 +34,16 @@ for n = 1:N-1
     eps_true((z >= startposition) & (z < dist_sum(n))) = layer_eps(n); 
 end
 
+for n = 1:N-1   
+    if n == 1
+        startposition = 0; 
+    else 
+        startposition = dist_sum(n-1);
+    end 
+    eps_fwr((z_fwr >= startposition) & (z_fwr < dist_sum(n))) = layer_eps(n); 
+end
+
+chi_fwr = (eps_fwr - eps_b) /eps_b; 
 chi_true = (eps_true - eps_b) /eps_b; 
 
 
@@ -37,11 +51,26 @@ G_D = zeros(Nc, Nc, Nf);
 G_S = zeros(Nf, Nc);  
 E_i = zeros(Nc, Nf); 
 
+G_D_fwr = zeros(Nc, Nc, Nf); 
+G_S_fwr = zeros(Nf, Nc);  
+E_i_fwr = zeros(Nc, Nf); 
+s = abs(z - z.'); 
+
 for p = 1:Nf    
-    s = abs(z - z.'); 
+    
+
+    G_D_fwr(:,:,p) = -1j*(k_b(p)*dz/2)*exp(-1j*k_b(p)*s);         
+    G_D_fwr(1:Nf+1:end) = exp(-1j*k_b(p)*dz/2) - 1;    
+
+    G_S_fwr(p,:) = (-1j*(k_b(p)*dz/2)*exp(-1j*k_b(p)*z)).';   
+    E_i_fwr(:,p) = exp(-1j*k_b(p)*z);       
+end
+
+for p = 1:Nf    
+
 
     G_D(:,:,p) = -1j*(k_b(p)*dz/2)*exp(-1j*k_b(p)*s);         
-    G_D(1:Nf:end) = exp(-1j*k_b(p)*dz/2) - 1;    
+    G_D(1:Nf+1:end) = exp(-1j*k_b(p)*dz/2) - 1;    
 
     G_S(p,:) = (-1j*(k_b(p)*dz/2)*exp(-1j*k_b(p)*z)).';   
     E_i(:,p) = exp(-1j*k_b(p)*z);       
@@ -54,8 +83,8 @@ E_s = zeros(Nf, 1);
 X_fwr = diag(chi_true);             
 I_fwr = eye(Nc);    
 for p = 1:Nf                
-    E_t = (I_fwr - G_D(:,:,p)*X_fwr) \ E_i(:,p);     
-    E_s(p) = G_S(p,:)*X_fwr*E_t;
+    E_t = (I_fwr - G_D_fwr(:,:,p)*X_fwr) \ E_i_fwr(:,p);     
+    E_s(p) = G_S_fwr(p,:)*X_fwr*E_t;
 end
 
 
@@ -91,7 +120,7 @@ for n = 1:n_iter
     RRE(n) = norm(h)^2/norm(E_s)^2; % Relative Residual error
     MSE(n) = norm(eps_b*(1+chi) - eps_true)/norm(eps_true); 
 
-    % BF 13
+    % BF 11
     d_chi  = (G_kernel'*G_kernel + lambda*(R'*R)) \ (G_kernel'*h);  
 
 
