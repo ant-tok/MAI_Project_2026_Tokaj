@@ -24,6 +24,7 @@ Nc_fwr = round(L/dz_fwr);
 z_fwr = ((1:Nc_fwr)' - 0.5)*dz_fwr;
 
 eps_true = layer_eps(N)*ones(Nc, 1); 
+eps_fwr = layer_eps(N)*ones(Nc_fwr, 1); 
 % Masks for the layers
 for n = 1:N-1   
     if n == 1
@@ -51,26 +52,28 @@ G_D = zeros(Nc, Nc, Nf);
 G_S = zeros(Nf, Nc);  
 E_i = zeros(Nc, Nf); 
 
-G_D_fwr = zeros(Nc, Nc, Nf); 
-G_S_fwr = zeros(Nf, Nc);  
-E_i_fwr = zeros(Nc, Nf); 
+G_D_fwr = zeros(Nc_fwr, Nc_fwr, Nf); 
+G_S_fwr = zeros(Nf, Nc_fwr);  
+E_i_fwr = zeros(Nc_fwr, Nf); 
 s = abs(z - z.'); 
+
+s_fwr = abs(z_fwr - z_fwr.'); 
 
 for p = 1:Nf    
     
 
-    G_D_fwr(:,:,p) = -1j*(k_b(p)*dz/2)*exp(-1j*k_b(p)*s);         
-    G_D_fwr(1:Nf+1:end) = exp(-1j*k_b(p)*dz/2) - 1;    
+    G_D_fwr(:,:,p) = -1j*(k_b(p)*dz_fwr/2)*exp(-1j*k_b(p)*s_fwr);         
+    G_D_fwr(1:Nc_fwr+1:end) = exp(-1j*k_b(p)*dz_fwr/2) - 1;    
 
-    G_S_fwr(p,:) = (-1j*(k_b(p)*dz/2)*exp(-1j*k_b(p)*z)).';   
-    E_i_fwr(:,p) = exp(-1j*k_b(p)*z);       
+    G_S_fwr(p,:) = (-1j*(k_b(p)*dz_fwr/2)*exp(-1j*k_b(p)*z_fwr)).';   
+    E_i_fwr(:,p) = exp(-1j*k_b(p)*z_fwr);       
 end
 
 for p = 1:Nf    
 
 
     G_D(:,:,p) = -1j*(k_b(p)*dz/2)*exp(-1j*k_b(p)*s);         
-    G_D(1:Nf+1:end) = exp(-1j*k_b(p)*dz/2) - 1;    
+    G_D(1:Nc+1:end) = exp(-1j*k_b(p)*dz/2) - 1;    
 
     G_S(p,:) = (-1j*(k_b(p)*dz/2)*exp(-1j*k_b(p)*z)).';   
     E_i(:,p) = exp(-1j*k_b(p)*z);       
@@ -80,8 +83,8 @@ I = eye(Nc);
 
 % Bassed on eqs 3 & 4
 E_s = zeros(Nf, 1);       
-X_fwr = diag(chi_true);             
-I_fwr = eye(Nc);    
+X_fwr = diag(chi_fwr);             
+I_fwr = eye(Nc_fwr);    
 for p = 1:Nf                
     E_t = (I_fwr - G_D_fwr(:,:,p)*X_fwr) \ E_i_fwr(:,p);     
     E_s(p) = G_S_fwr(p,:)*X_fwr*E_t;
@@ -156,3 +159,18 @@ figure;
 semilogy(1:n_iter, RRE, 'o-', 'LineWidth', 1.2); hold on; grid on;
 plot(1:n_iter, MSE, 's-', 'LineWidth', 1.2);
 xlabel('Iteration'); ylabel('Error'); legend('RRE', 'MSE'); title('Convergence');
+
+
+% df = freq_list(2) - freq_list(1);
+% Nt = 500;
+% t = linspace(0, 1/df, Nt)';   
+% 
+% 
+% figure;
+% 
+% plot(t*1e9, E_s, 'k-', 'LineWidth', 1.5); hold on; grid on;
+% plot(t*1e9, E_s_final, 'r--', 'LineWidth', 1.2);
+% xlabel('Time (ns)'); 
+% ylabel('Received signal'); 
+% legend('Measured', 'DBIM model'); 
+% title('Received signal ');
